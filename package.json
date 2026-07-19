@@ -1,0 +1,31 @@
+{
+  "name": "claude-gauge",
+  "version": "1.0.0",
+  "description": "Claude Code statusline: shows the active model and a live usage percentage bar (context window used / remaining, plus session cost).",
+  "bin": {
+    "claude-gauge": "bin/claude-gauge.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "statusline",
+    "usage",
+    "context-window"
+  ],
+  "author": "Brad Barroso",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bradleybeatz1313/claude-gauge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bradleybeatz1313/claude-gauge/issues"
+  },
+  "homepage": "https://github.com/bradleybeatz1313/claude-gauge#readme"
+}
