@@ -39,9 +39,32 @@ node bin/claude-gauge.js install
 
 | Command | What it does |
 |---|---|
-| `claude-gauge install` | Wire into `~/.claude/settings.json` |
-| `claude-gauge uninstall` | Remove the statusline entry |
+| `claude-gauge install` | Copy to `~/.claude/` and wire into `settings.json` |
+| `claude-gauge uninstall` | Remove the statusline entry and stable script |
+| `claude-gauge doctor` | Diagnose exactly what Claude Code will render |
 | `claude-gauge test` | Preview the bar with sample data |
+
+## Universal by design
+
+`install` doesn't point Claude Code at your clone folder or an npx cache dir
+(both can move or get wiped). It **copies the script to a stable home**,
+`~/.claude/claude-gauge.js`, and writes a cross-shell command:
+
+```
+node "<home>/.claude/claude-gauge.js"
+```
+
+Bare `node` resolves via PATH in cmd.exe, PowerShell, and POSIX shells;
+forward slashes are safe everywhere and dodge Windows' nested-quote footgun.
+So it renders the same whether Claude Code invokes the statusline through
+cmd.exe, PowerShell, sh, bash, or zsh — on Windows, macOS, or Linux.
+
+## Not seeing the bar?
+
+Run `claude-gauge doctor` — it prints the settings path, whether the command
+target exists, the transcript it found, and a live sample render. Note the
+statusline appears in the **Claude Code terminal CLI** at the bottom of the
+window and only after a **full restart** (close every session and reopen).
 
 ## How it works
 

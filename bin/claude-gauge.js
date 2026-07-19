@@ -1,12 +1,21 @@
 #!/usr/bin/env node
 /**
- * claude-gauge — Claude Code statusline with a live usage percentage bar.
+ * claude-gauge — universal Claude Code statusline with a usage percentage bar.
+ *
+ * Shows: active model + a bar of context-window usage (used / left) + cost.
+ *
+ * Universal install: on `install` the script copies itself to a STABLE home
+ * (~/.claude/claude-gauge.js) so the statusline never depends on an ephemeral
+ * npx cache dir or the folder you cloned into. The statusline command uses a
+ * cross-shell form ( node "<forward-slash-path>" ) that works whether Claude
+ * Code invokes it through cmd.exe, PowerShell, sh, bash, or zsh.
  *
  * Modes:
- *   claude-gauge            (no args, JSON on stdin)  -> render statusline
- *   claude-gauge install    -> wire into ~/.claude/settings.json
- *   claude-gauge uninstall  -> remove from ~/.claude/settings.json
- *   claude-gauge test       -> render with sample data (no Claude Code needed)
+ *   claude-gauge            (JSON on stdin)  -> render statusline
+ *   claude-gauge install    -> copy to ~/.claude and wire into settings.json
+ *   claude-gauge uninstall  -> remove from settings.json
+ *   claude-gauge doctor     -> diagnose: what Claude Code will actually render
+ *   claude-gauge test       -> render with sample data
  */
 
 'use strict';
@@ -16,7 +25,7 @@ const os = require('os');
 const path = require('path');
 
 // ---------------------------------------------------------------------------
-// ANSI helpers (statusline output supports ANSI colors)
+// ANSI helpers
 // ---------------------------------------------------------------------------
 const ESC = '\x1b[';
 const RESET = ESC + '0m';
@@ -28,7 +37,7 @@ const RED = ESC + '31m';
 const CYAN = ESC + '36m';
 
 // ---------------------------------------------------------------------------
-// Context-window limits by model id
+// Context-window limits
 // ---------------------------------------------------------------------------
 const DEFAULT_LIMIT = 200000;
 
@@ -42,11 +51,9 @@ function contextLimitFor(modelId) {
 }
 
 // ---------------------------------------------------------------------------
-// Token usage: prefer fields in the statusline payload, else tail the
-// session transcript (JSONL) and read the most recent assistant usage block.
+// Token usage: payload first, else tail the session transcript (JSONL).
 // ---------------------------------------------------------------------------
 function usedTokensFromPayload(data) {
-  // Newer Claude Code versions may include context info directly.
   const cw = data.context_window || data.context || null;
   if (cw && typeof cw === 'object') {
     const used =
@@ -55,7 +62,7 @@ function usedTokensFromPayload(data) {
       cw.tokens_used != null ? cw.tokens_used : null;
     if (used != null && isFinite(used)) {
       const size = cw.context_window_size || cw.size || cw.limit || null;
-      return { used: Number(used), limit: size ? Number(size) : null };
+      return { used: Number(used), limit: size ? Number(size) : null, src: 'payload' };
     }
   }
   return null;
@@ -65,7 +72,7 @@ function usedTokensFromTranscript(transcriptPath) {
   try {
     if (!transcriptPath || !fs.existsSync(transcriptPath)) return null;
     const stat = fs.statSync(transcriptPath);
-    const TAIL = 262144; // read at most the last 256 KB
+    const TAIL = 524288; // last 512 KB
     const start = Math.max(0, stat.size - TAIL);
     const fd = fs.openSync(transcriptPath, 'r');
     const buf = Buffer.alloc(stat.size - start);
@@ -85,7 +92,7 @@ function usedTokensFromTranscript(transcriptPath) {
           (usage.input_tokens || 0) +
           (usage.cache_read_input_tokens || 0) +
           (usage.cache_creation_input_tokens || 0);
-        if (used > 0) return { used, limit: null };
+        if (used > 0) return { used: used, limit: null, src: 'transcript' };
       }
     }
     return null;
@@ -110,10 +117,9 @@ function renderStatusline(data) {
     (data.model && (data.model.display_name || data.model.id)) || 'Claude';
   const modelId = data.model && data.model.id;
 
-  const transcriptPath = data.transcript_path;
-  const payloadUsage = usedTokensFromPayload(data);
-  const transcriptUsage = payloadUsage ? null : usedTokensFromTranscript(transcriptPath);
-  const usage = payloadUsage || transcriptUsage;
+  const usage =
+    usedTokensFromPayload(data) ||
+    usedTokensFromTranscript(data.transcript_path);
 
   const parts = [];
   parts.push(CYAN + BOLD + '⚡ ' + modelName + RESET);
@@ -143,10 +149,19 @@ function renderStatusline(data) {
 }
 
 // ---------------------------------------------------------------------------
-// install / uninstall — edit ~/.claude/settings.json
+// Paths
 // ---------------------------------------------------------------------------
+function claudeDir() {
+  return path.join(os.homedir(), '.claude');
+}
 function settingsPath() {
-  return path.join(os.homedir(), '.claude', 'settings.json');
+  return path.join(claudeDir(), 'settings.json');
+}
+function stableScriptPath() {
+  return path.join(claudeDir(), 'claude-gauge.js');
+}
+function toForwardSlash(p) {
+  return p.replace(/\\/g, '/');
 }
 
 function readSettings(file) {
@@ -156,15 +171,30 @@ function readSettings(file) {
   return JSON.parse(raw); // throws on invalid JSON — we bail rather than clobber
 }
 
+// Universal command form:
+//   node "<forward-slash absolute path>"
+// - bare `node`: resolves via PATH in cmd.exe, PowerShell, and POSIX shells
+//   (Claude Code's own hooks rely on bare `node`, proving it resolves).
+// - forward slashes: accepted by Node on Windows and safe/unescaped in sh.
+// - single quoted token starting with a letter avoids cmd.exe's
+//   strip-outer-quotes footgun that bites "C:\Program Files\node.exe" forms.
 function statuslineCommand() {
-  // Absolute node + absolute script: works for local clones and global
-  // installs alike, and avoids per-refresh `npx` startup cost.
-  return '"' + process.execPath + '" "' + __filename + '"';
+  return 'node "' + toForwardSlash(stableScriptPath()) + '"';
 }
 
+// ---------------------------------------------------------------------------
+// install / uninstall
+// ---------------------------------------------------------------------------
 function installSelf() {
+  const dir = claudeDir();
+  fs.mkdirSync(dir, { recursive: true });
+
+  // 1. Copy THIS file to the stable home (decouples from npx cache / clone dir)
+  const dest = stableScriptPath();
+  fs.copyFileSync(__filename, dest);
+
+  // 2. Wire into settings.json (with backup)
   const file = settingsPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
   let settings;
   try {
     settings = readSettings(file);
@@ -175,12 +205,16 @@ function installSelf() {
   if (fs.existsSync(file)) {
     fs.copyFileSync(file, file + '.claude-gauge.bak');
   }
-  settings.statusLine = { type: 'command', command: statuslineCommand() };
+  settings.statusLine = { type: 'command', command: statuslineCommand(), padding: 0 };
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
-  console.log('✓ claude-gauge installed as your Claude Code statusline.');
-  console.log('  settings: ' + file + ' (backup: ' + file + '.claude-gauge.bak)');
+
+  console.log('✓ claude-gauge installed (universal).');
+  console.log('  script:   ' + dest);
+  console.log('  settings: ' + file + '  (backup: ' + path.basename(file) + '.claude-gauge.bak)');
   console.log('  command:  ' + settings.statusLine.command);
-  console.log('Restart Claude Code (or start a new session) to see the gauge.');
+  console.log('');
+  console.log('Now fully RESTART Claude Code (close all sessions/windows and reopen).');
+  console.log('Then run  claude-gauge doctor  if the bar does not appear.');
 }
 
 function uninstallSelf() {
@@ -199,6 +233,76 @@ function uninstallSelf() {
   } else {
     console.log('No statusLine configured — nothing to remove.');
   }
+  try { fs.unlinkSync(stableScriptPath()); } catch (e) { /* ignore */ }
+}
+
+// ---------------------------------------------------------------------------
+// doctor — show exactly what Claude Code will render, and why
+// ---------------------------------------------------------------------------
+function findLatestTranscript() {
+  try {
+    const projects = path.join(claudeDir(), 'projects');
+    if (!fs.existsSync(projects)) return null;
+    let best = null, bestMtime = 0;
+    const walk = function (d) {
+      for (const name of fs.readdirSync(d)) {
+        const full = path.join(d, name);
+        const st = fs.statSync(full);
+        if (st.isDirectory()) walk(full);
+        else if (name.endsWith('.jsonl') && st.mtimeMs > bestMtime) {
+          bestMtime = st.mtimeMs; best = full;
+        }
+      }
+    };
+    walk(projects);
+    return best;
+  } catch (e) { return null; }
+}
+
+function doctor() {
+  const file = settingsPath();
+  console.log('claude-gauge doctor');
+  console.log('===================');
+  console.log('home:            ' + os.homedir());
+  console.log('settings.json:   ' + (fs.existsSync(file) ? file : '(missing)'));
+
+  let settings = {};
+  try { settings = readSettings(file); }
+  catch (e) { console.log('settings PARSE ERROR: ' + e.message); }
+
+  const sl = settings.statusLine;
+  console.log('statusLine set:  ' + (sl ? 'yes' : 'NO  <-- run: claude-gauge install'));
+  if (sl) console.log('  command:       ' + sl.command);
+
+  const stable = stableScriptPath();
+  console.log('stable script:   ' + (fs.existsSync(stable) ? stable + '  (ok)' : stable + '  MISSING <-- run install'));
+
+  // Does the command point at something that exists?
+  if (sl && sl.command) {
+    const m = sl.command.match(/"([^"]+\.js)"/) || sl.command.match(/(\S+\.js)/);
+    const target = m && m[1];
+    if (target) {
+      const native = target.replace(/\//g, path.sep);
+      console.log('command target:  ' + (fs.existsSync(native) ? 'exists (ok)' : 'DOES NOT EXIST <-- run install to fix'));
+    }
+  }
+
+  const t = findLatestTranscript();
+  console.log('latest transcript: ' + (t || '(none found yet)'));
+
+  console.log('');
+  console.log('--- sample render (what the bar looks like) ---');
+  const sample = {
+    model: { id: 'claude-opus-4-8', display_name: 'Opus 4.8' },
+    transcript_path: t,
+    cost: { total_cost_usd: 0.5 }
+  };
+  process.stdout.write(renderStatusline(sample) + '\n');
+  console.log('-----------------------------------------------');
+  console.log('If you see a bar above, the tool works. If it is missing in Claude');
+  console.log('Code itself: the statusline shows in the Claude Code TERMINAL CLI at');
+  console.log('the bottom of the window, and only after a FULL restart. Some IDE/');
+  console.log('web clients render it differently.');
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +313,7 @@ function main() {
 
   if (cmd === 'install') return installSelf();
   if (cmd === 'uninstall') return uninstallSelf();
+  if (cmd === 'doctor') return doctor();
 
   if (cmd === 'test') {
     const sample = {
@@ -224,11 +329,12 @@ function main() {
   if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
     console.log('claude-gauge — Claude Code statusline with a usage percentage bar');
     console.log('');
-    console.log('  claude-gauge install     add to ~/.claude/settings.json');
-    console.log('  claude-gauge uninstall   remove from ~/.claude/settings.json');
+    console.log('  claude-gauge install     copy to ~/.claude and wire into settings.json');
+    console.log('  claude-gauge uninstall   remove it');
+    console.log('  claude-gauge doctor      diagnose what Claude Code will render');
     console.log('  claude-gauge test        preview with sample data');
     console.log('');
-    console.log('With no arguments it reads the Claude Code statusline JSON from stdin.');
+    console.log('With no arguments it reads the statusline JSON from stdin.');
     return;
   }
 
@@ -238,7 +344,7 @@ function main() {
   process.stdin.on('data', function (chunk) { input += chunk; });
   process.stdin.on('end', function () {
     let data = {};
-    try { data = JSON.parse(input); } catch (e) { /* render best-effort */ }
+    try { data = JSON.parse(input); } catch (e) { /* best-effort */ }
     try {
       process.stdout.write(renderStatusline(data));
     } catch (e) {
