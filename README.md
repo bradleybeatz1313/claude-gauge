@@ -10,25 +10,30 @@ left, and your session cost.
 
 The bar is green under 60%, yellow to 85%, red above.
 
-## Install
-
-From this folder (no npm publish needed):
+## Install globally (from GitHub)
 
 ```sh
-node bin/claude-gauge.js install
+npm install -g github:bradleybeatz1313/claude-gauge
+claude-gauge install
 ```
 
-Or install the CLI globally first:
+Or run it without installing:
 
 ```sh
-npm install -g .
-claude-gauge install
+npx github:bradleybeatz1313/claude-gauge install
 ```
 
 Then restart Claude Code (or start a new session). `install` writes a
 `statusLine` entry into `~/.claude/settings.json` (a `.claude-gauge.bak`
-backup is saved first). If published to npm, `npx claude-gauge install` works
-too.
+backup is saved first).
+
+### From a local clone
+
+```sh
+git clone https://github.com/bradleybeatz1313/claude-gauge
+cd claude-gauge
+node bin/claude-gauge.js install
+```
 
 ## Commands
 
